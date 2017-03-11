@@ -9,6 +9,7 @@ using QBitNinja.Models;
 using QBitNinja.Notifications;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -99,6 +100,7 @@ namespace QBitNinja.Controllers
 
 		[HttpGet]
 		[Route("transactions/{txId}")]
+		[Route("tx/{txId}")]
 		public async Task<object> Transaction(
 			[ModelBinder(typeof(BitcoinSerializableModelBinder))]
 			uint256 txId,
@@ -448,10 +450,10 @@ namespace QBitNinja.Controllers
 		[Route("blocks/{blockFeature}")]
 		public object Block(
 			[ModelBinder(typeof(BlockFeatureModelBinder))]
-			BlockFeature blockFeature, bool headerOnly = false, DataFormat format = DataFormat.Json)
+			BlockFeature blockFeature, bool headerOnly = false, DataFormat format = DataFormat.Json, bool extended = false)
 		{
 			if(format == DataFormat.Json)
-				return JsonBlock(blockFeature, headerOnly);
+				return JsonBlock(blockFeature, headerOnly, extended);
 
 			return RawBlock(blockFeature, headerOnly);
 		}
@@ -466,18 +468,17 @@ namespace QBitNinja.Controllers
 		}
 
 		[HttpGet]
-		[Route("balances/{address}/summary")]
+		[Route("balances/{balanceId}/summary")]
 		public BalanceSummary AddressBalanceSummary(
-			[ModelBinder(typeof(Base58ModelBinder))]
-			IDestination address,
+			[ModelBinder(typeof(BalanceIdModelBinder))]
+			BalanceId balanceId,
 			[ModelBinder(typeof(BlockFeatureModelBinder))]
 			BlockFeature at = null,
 			bool debug = false,
 			bool colored = false)
 		{
-			BalanceId id = new BalanceId(address);
-			colored = address is BitcoinColoredAddress || colored;
-			return BalanceSummary(id, at, debug, colored);
+			colored = colored || IsColoredAddress();
+			return BalanceSummary(balanceId, at, debug, colored);
 		}
 
 		public BalanceSummary BalanceSummary(
@@ -496,12 +497,13 @@ namespace QBitNinja.Controllers
 			var atBlock = AtBlock(at);
 
 			var query = new BalanceQuery();
-			//query.From = null;
+			query.RawOrdering = true;
+			query.From = null;
+
 			if(at != null)
 				query.From = ToBalanceLocator(atBlock);
-
-			//if (query.From == null)
-			//    query.From = new UnconfirmedBalanceLocator(DateTimeOffset.UtcNow - TimeSpan.FromHours(24.0));
+			if(query.From == null)
+				query.From = new UnconfirmedBalanceLocator(DateTimeOffset.UtcNow - Expiration);
 
 			query.PageSizes = new[] { 1, 10, 100 };
 
@@ -526,8 +528,9 @@ namespace QBitNinja.Controllers
 			};
 
 			int stopAtHeight = cachedSummary.Locator == null ? -1 : cachedLocator.Height;
-			if(at == null) //Need more block to find the unconfs
-				stopAtHeight = stopAtHeight - 12;
+			int lookback = (int)(Expiration.Ticks / this.Network.Consensus.PowTargetSpacing.Ticks);
+			if(at == null)
+				stopAtHeight = stopAtHeight - lookback;
 
 			var client = Configuration.Indexer.CreateIndexerClient();
 			client.ColoredBalance = colored;
@@ -537,7 +540,8 @@ namespace QBitNinja.Controllers
 				.GetOrderedBalance(balanceId, query)
 				.WhereNotExpired(Expiration)
 				.TakeWhile(_ => !cancel.IsCancellationRequested)
-				.TakeWhile(_ => _.BlockId == null || _.Height > stopAtHeight)
+				//Some confirmation of the fetched unconfirmed may hide behind stopAtHeigh
+				.TakeWhile(_ => _.BlockId == null || _.Height > stopAtHeight - lookback)
 				.AsBalanceSheet(Chain);
 
 			if(cancel.Token.IsCancellationRequested)
@@ -548,6 +552,8 @@ namespace QBitNinja.Controllers
 					ReasonPhrase = "The server can't fetch the balance summary because the balance is too big. Please, load it in several step with ?at={blockFeature} parameter. Once fully loaded after all the step, the summary will return in constant time."
 				});
 			}
+			RemoveBehind(diff, stopAtHeight);
+			RemoveConflicts(diff);
 
 			var unconfs = diff.Unconfirmed;
 			var confs = cachedLocator == null ?
@@ -591,6 +597,26 @@ namespace QBitNinja.Controllers
 			return summary;
 		}
 
+		private void RemoveBehind(BalanceSheet diff, int stopAtHeight)
+		{
+			RemoveBehind(diff.All, stopAtHeight);
+			RemoveBehind(diff.Confirmed, stopAtHeight);
+			RemoveBehind(diff.Unconfirmed, stopAtHeight);
+			RemoveBehind(diff.Prunable, stopAtHeight);
+		}
+
+		private void RemoveBehind(List<OrderedBalanceChange> changes, int stopAtHeight)
+		{
+			foreach(var change in changes.ToList())
+			{
+				if(change.BlockId != null)
+				{
+					if(change.Height <= stopAtHeight)
+						changes.Remove(change);
+				}
+			}
+		}
+
 		private ConfirmedBalanceLocator ToBalanceLocator(BlockFeature feature)
 		{
 			return ToBalanceLocator(AtBlock(feature));
@@ -616,7 +642,7 @@ namespace QBitNinja.Controllers
 
 		private bool IsMature(int height, ChainedBlock tip)
 		{
-			return (tip.Height - height + 1) >= Configuration.CoinbaseMaturity;
+			return tip.Height - height >= Configuration.CoinbaseMaturity;
 		}
 
 		private bool IsMature(OrderedBalanceChange c, ChainedBlock tip)
@@ -625,10 +651,10 @@ namespace QBitNinja.Controllers
 		}
 
 		[HttpGet]
-		[Route("balances/{address}")]
+		[Route("balances/{balanceId}")]
 		public BalanceModel AddressBalance(
-			[ModelBinder(typeof(Base58ModelBinder))]
-			IDestination address,
+			[ModelBinder(typeof(BalanceIdModelBinder))]
+			BalanceId balanceId,
 			[ModelBinder(typeof(BalanceLocatorModelBinder))]
 			BalanceLocator continuation = null,
 			[ModelBinder(typeof(BlockFeatureModelBinder))]
@@ -639,12 +665,17 @@ namespace QBitNinja.Controllers
 			bool unspentOnly = false,
 			bool colored = false)
 		{
-			var balanceId = new BalanceId(address);
-			colored = address is BitcoinColoredAddress || colored;
+			colored = colored || IsColoredAddress();
 			return Balance(balanceId, continuation, until, from, includeImmature, unspentOnly, colored);
 		}
 
-		TimeSpan Expiration = TimeSpan.FromHours(6.0);
+		//Property passed by BalanceIdModelBinder
+		private bool IsColoredAddress()
+		{
+			return ActionContext.Request.Properties.ContainsKey("BitcoinColoredAddress");
+		}
+
+		TimeSpan Expiration = TimeSpan.FromHours(24.0);
 		BalanceModel Balance(BalanceId balanceId,
 			BalanceLocator continuation,
 			BlockFeature until,
@@ -657,6 +688,7 @@ namespace QBitNinja.Controllers
 			cancel.CancelAfter(30000);
 
 			BalanceQuery query = new BalanceQuery();
+			query.RawOrdering = true;
 			query.From = null;
 
 			if(from != null)
@@ -672,11 +704,12 @@ namespace QBitNinja.Controllers
 					From = continuation,
 					FromIncluded = false
 				};
+				query.RawOrdering = true;
 			}
 
 			if(query.From == null)
 			{
-				query.From = new UnconfirmedBalanceLocator(DateTimeOffset.UtcNow - TimeSpan.FromHours(24.0));
+				query.From = new UnconfirmedBalanceLocator(DateTimeOffset.UtcNow - Expiration);
 			}
 
 			if(until != null)
@@ -686,7 +719,7 @@ namespace QBitNinja.Controllers
 			}
 
 			if(query.To.IsGreaterThan(query.From))
-				throw InvalidParameters("Invalid agurment : from < until");
+				throw InvalidParameters("Invalid argument : from < until");
 
 			var client = Configuration.Indexer.CreateIndexerClient();
 			client.ColoredBalance = colored;
@@ -699,17 +732,30 @@ namespace QBitNinja.Controllers
 				.AsBalanceSheet(Chain);
 
 			var balanceChanges = balance.All;
+
 			if(until != null && balance.Confirmed.Count != 0) //Strip unconfirmed that can appear after the last until
 			{
-				for(int i = balanceChanges.Count - 1; i >= 0; i--)
+				List<OrderedBalanceChange> oldUnconfirmed = new List<OrderedBalanceChange>();
+				var older = balanceChanges.Last();
+				for(int i = 0; i < balanceChanges.Count; i++)
 				{
 					var last = balanceChanges[i];
 					if(last.BlockId == null)
-						balanceChanges.RemoveAt(i);
+					{
+						if(last.SeenUtc < older.SeenUtc)
+							oldUnconfirmed.Add(last);
+					}
 					else
 						break;
 				}
+				foreach(var unconf in oldUnconfirmed)
+				{
+					balanceChanges.Remove(unconf);
+				}
 			}
+
+			var conflicts = RemoveConflicts(balance);
+
 			if(unspentOnly)
 			{
 				HashSet<OutPoint> spents = new HashSet<OutPoint>();
@@ -725,6 +771,7 @@ namespace QBitNinja.Controllers
 			}
 
 			var result = new BalanceModel(balanceChanges, Chain);
+			result.ConflictedOperations = result.GetBalanceOperations(conflicts, Chain);
 			if(cancel.IsCancellationRequested)
 			{
 				if(balanceChanges.Count > 0)
@@ -734,6 +781,55 @@ namespace QBitNinja.Controllers
 				}
 			}
 			return result;
+		}
+
+		private List<OrderedBalanceChange> RemoveConflicts(BalanceSheet balance)
+		{
+			var spentOutputs = new Dictionary<OutPoint, OrderedBalanceChange>();
+			var conflicts = new List<OrderedBalanceChange>();
+			var unconfirmedConflicts = new List<OrderedBalanceChange>();
+			foreach(var balanceChange in balance.All)
+			{
+				foreach(var spent in balanceChange.SpentCoins)
+				{
+					if(!spentOutputs.TryAdd(spent.Outpoint, balanceChange))
+					{
+						var balanceChange2 = spentOutputs[spent.Outpoint];
+						var score = GetScore(balanceChange);
+						var score2 = GetScore(balanceChange2);
+						var conflicted =
+							score == score2 ?
+									((balanceChange.SeenUtc < balanceChange2.SeenUtc) ? balanceChange : balanceChange2) :
+							score < score2 ? balanceChange : balanceChange2;
+						conflicts.Add(conflicted);
+
+						var nonConflicted = conflicted == balanceChange ? balanceChange2 : balanceChange;
+						if(nonConflicted.BlockId == null || !Chain.Contains(nonConflicted.BlockId))
+							unconfirmedConflicts.Add(conflicted);
+					}
+				}
+			}
+			foreach(var conflict in conflicts)
+			{
+				balance.All.Remove(conflict);
+				balance.Unconfirmed.Remove(conflict);
+			}
+
+			return unconfirmedConflicts;
+		}
+
+		private long GetScore(OrderedBalanceChange balance)
+		{
+			long score = 0;
+			if(balance.BlockId != null)
+			{
+				score += 10;
+				if(Chain.Contains(balance.BlockId))
+				{
+					score += 100;
+				}
+			}
+			return score;
 		}
 
 		private Exception InvalidParameters(string message)
@@ -757,6 +853,28 @@ namespace QBitNinja.Controllers
 			return resp;
 		}
 
+		[HttpGet]
+		[Route("bip9")]
+		public JObject GetBIP9()
+		{
+			var stats = GetVersionStats();
+			var result = JObject.Parse(JsonConvert.SerializeObject(stats, base.Configuration.Formatters.JsonFormatter.SerializerSettings));
+			foreach(var period in result.OfType<JProperty>().Select(p => (JObject)p.Value))
+			{
+				foreach(var stat in ((JArray)period["stats"]).OfType<JObject>().ToArray())
+				{
+					((JArray)period["stats"]).Remove(stat);
+					if(stat["proposal"] != null)
+					{
+						period.Add(stat["proposal"].ToString(), stat);
+						stat.Remove("proposal");
+					}
+				}
+				period.Remove("stats");
+			}
+			return result;
+		}
+
 		private VersionStats GetVersionStats(ChainedBlock[] chainedBlock)
 		{
 			VersionStats stats = new VersionStats();
@@ -775,8 +893,8 @@ namespace QBitNinja.Controllers
 			{
 				new
 				{
-					Name = "CSV",
-					Bit = 0
+					Name = "SEGWIT",
+					Bit = 1
 				}
 			};
 
@@ -819,7 +937,7 @@ namespace QBitNinja.Controllers
 			}
 		}
 
-		internal GetBlockResponse JsonBlock(BlockFeature blockFeature, bool headerOnly)
+		internal GetBlockResponse JsonBlock(BlockFeature blockFeature, bool headerOnly, bool extended)
 		{
 			var block = GetBlock(blockFeature, headerOnly);
 			if(block == null)
@@ -833,8 +951,56 @@ namespace QBitNinja.Controllers
 			return new GetBlockResponse()
 			{
 				AdditionalInformation = FetchBlockInformation(new[] { block.Header.GetHash() }) ?? new BlockInformation(block.Header),
+				ExtendedInformation = extended ? FetchExtendedBlockInformation(blockFeature, block) : null,
 				Block = headerOnly ? null : block
 			};
+		}
+
+		private ExtendedBlockInformation FetchExtendedBlockInformation(BlockFeature blockFeature, Block block)
+		{
+			var id = block.Header.GetHash().ToString();
+			var extendedInfo = Configuration.GetCacheTable<ExtendedBlockInformation>().ReadOne(id);
+			if(extendedInfo != null)
+				return extendedInfo;
+			ChainedBlock chainedBlock = blockFeature.GetChainedBlock(Chain);
+			if(chainedBlock == null)
+				return null;
+			if(block.Transactions.Count == 0)
+			{
+				block = GetBlock(blockFeature, false);
+				if(block == null || block.Transactions.Count == 0)
+					return null;
+			}
+			extendedInfo = new ExtendedBlockInformation()
+			{
+				BlockReward = block.Transactions[0].TotalOut,
+				BlockSubsidy = GetBlockSubsidy(chainedBlock.Height),
+				Size = GetSize(block, TransactionOptions.All),
+				StrippedSize = GetSize(block, TransactionOptions.None),
+				TransactionCount = block.Transactions.Count
+			};
+			Configuration.GetCacheTable<ExtendedBlockInformation>().Create(id, extendedInfo, true);
+			return extendedInfo;
+		}
+
+		public int GetSize(IBitcoinSerializable data, TransactionOptions options)
+		{
+			var bms = new BitcoinStream(Stream.Null, true);
+			bms.TransactionOptions = options;
+			data.ReadWrite(bms);
+			return (int)bms.Counter.WrittenBytes;
+		}
+		Money GetBlockSubsidy(int nHeight)
+		{
+			int halvings = nHeight / Configuration.Indexer.Network.Consensus.SubsidyHalvingInterval;
+			// Force block reward to zero when right shift is undefined.
+			if(halvings >= 64)
+				return 0;
+
+			Money nSubsidy = Money.Coins(50);
+			// Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
+			nSubsidy >>= halvings;
+			return nSubsidy;
 		}
 
 		private Block GetBlock(BlockFeature blockFeature, bool headerOnly)
@@ -843,6 +1009,8 @@ namespace QBitNinja.Controllers
 			var hash = chainedBlock == null ? blockFeature.BlockId : chainedBlock.HashBlock;
 			if(hash == null)
 				return null;
+			if(chainedBlock != null && chainedBlock.Height == 0)
+				return headerOnly ? new NBitcoin.Block(Network.GetGenesis().Header) : Network.GetGenesis();
 			var client = Configuration.Indexer.CreateIndexerClient();
 			return headerOnly ? GetHeader(hash, client) : client.GetBlock(hash);
 		}

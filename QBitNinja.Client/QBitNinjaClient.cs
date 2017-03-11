@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using NBitcoin.DataEncoders;
+using System.Net.Http.Headers;
 #if CLIENT
 using QBitNinja.Client.JsonConverters;
 using QBitNinja.Client.Models;
@@ -188,9 +189,9 @@ namespace QBitNinja.Client
                 throw new ArgumentNullException("network");
             Network = network;
             if(network == Network.Main)
-                BaseAddress = new Uri("http://api.qbit.ninja/", UriKind.Absolute);
+                BaseAddress = new Uri("https://api.qbit.ninja/", UriKind.Absolute);
             if(network == Network.TestNet)
-                BaseAddress = new Uri("http://tapi.qbit.ninja/", UriKind.Absolute);
+                BaseAddress = new Uri("https://tapi.qbit.ninja/", UriKind.Absolute);
             if(BaseAddress == null)
                 throw new NotSupportedException("Network not supported");
         }
@@ -237,18 +238,80 @@ namespace QBitNinja.Client
             return Post<BroadcastResponse>("transactions", Encoders.Hex.EncodeData(transaction.ToBytes()));
         }
 
-        public Task<BalanceModel> GetBalance(IDestination dest, bool unspentOnly = false)
+
+		public Task<BalanceModel> GetBalance(BalanceSelector dest, bool unspentOnly = false)
+		{
+			if(dest == null)
+				throw new ArgumentNullException("dest");
+			return Get<BalanceModel>("balances/" + EscapeUrlPart(dest.ToString()) + CreateParameters("unspentOnly", unspentOnly));
+		}
+
+		public Task<BalanceModel> GetBalance(string wallet, bool unspentOnly = false)
+		{
+			if(wallet == null)
+				throw new ArgumentNullException("wallet");
+			return GetBalance(new BalanceSelector(new WalletName(wallet)), unspentOnly);
+		}
+
+		public Task<BalanceModel> GetBalance(Script dest, bool unspentOnly = false)
+		{
+			if(dest == null)
+				throw new ArgumentNullException("dest");
+			return GetBalance(new BalanceSelector(dest), unspentOnly);
+		}
+
+		public Task<BalanceModel> GetBalance(IDestination dest, bool unspentOnly = false)
         {
-            var address = AssertAddress(dest);
-            return Get<BalanceModel>("balances/" + EscapeUrlPart(address.ToString()) + CreateParameters("unspentOnly", unspentOnly));
-        }
-        public Task<BalanceSummary> GetBalanceSummary(IDestination dest)
+			if(dest == null)
+				throw new ArgumentNullException("dest");
+			return GetBalance(new BalanceSelector(dest), unspentOnly);
+		}
+
+		public Task<BalanceModel> GetBalanceBetween(
+			BalanceSelector dest,
+			BlockFeature from = null,
+			BlockFeature until = null,
+			bool includeImmature = false,
+			bool unspentOnly = false)
+		{
+
+			return Get<BalanceModel>("balances/" + EscapeUrlPart(dest.ToString())
+				+ CreateParameters("unspentOnly", unspentOnly,
+								   "until", until,
+								   "from", from));
+		}
+
+		public Task<BalanceSummary> GetBalanceSummary(BalanceSelector dest)
+		{
+			if(dest == null)
+				throw new ArgumentNullException("dest");
+			return Get<BalanceSummary>("balances/" + EscapeUrlPart(dest.ToString()) + "/summary" + CreateParameters());
+		}
+
+		public Task<BalanceSummary> GetBalanceSummary(Script dest)
+		{
+			if(dest == null)
+				throw new ArgumentNullException("dest");
+			return GetBalanceSummary(new BalanceSelector(dest));
+		}
+
+		public Task<BalanceSummary> GetBalanceSummary(string wallet)
+		{
+			if(wallet == null)
+				throw new ArgumentNullException("wallet");
+			return GetBalanceSummary(new BalanceSelector(new WalletName(wallet)));
+		}
+
+		public Task<BalanceSummary> GetBalanceSummary(IDestination dest)
         {
-            var address = AssertAddress(dest);
-            return Get<BalanceSummary>("balances/" + EscapeUrlPart(address.ToString()) + "/summary" + CreateParameters());
+			if(dest == null)
+				throw new ArgumentNullException("dest");
+			return GetBalanceSummary(new BalanceSelector(dest));
         }
 
-        private string CreateParameters(params object[] parameters)
+
+
+		private string CreateParameters(params object[] parameters)
         {
             if(Colored != null)
             {
@@ -258,26 +321,15 @@ namespace QBitNinja.Client
             StringBuilder builder = new StringBuilder();
             for(int i = 0; i < parameters.Length - 1; i += 2)
             {
+				if(parameters[i + 1] == null)
+					continue;
                 builder.Append(parameters[i].ToString() + "=" + parameters[i + 1].ToString() + "&");
             }
             if(builder.Length == 0)
                 return "";
             var result = builder.ToString();
             return "?" + result.Substring(0, result.Length - 1);
-        }
-
-        public Task<BalanceModel> GetBalance(string wallet, bool unspentOnly = false)
-        {
-            if(wallet == null)
-                throw new ArgumentNullException("wallet");
-            return Get<BalanceModel>("wallets/" + EscapeUrlPart(wallet) + "/balance" + CreateParameters("unspentOnly", unspentOnly));
-        }
-        public Task<BalanceSummary> GetBalanceSummary(string wallet)
-        {
-            if(wallet == null)
-                throw new ArgumentNullException("wallet");
-            return Get<BalanceSummary>("wallets/" + EscapeUrlPart(wallet) + "/summary" + CreateParameters());
-        }
+        }              
 
         public Task<WalletModel> CreateWallet(string wallet)
         {
@@ -289,23 +341,23 @@ namespace QBitNinja.Client
             });
         }
 
-        private Base58Data AssertAddress(IDestination dest)
-        {
-            if(dest == null)
-                throw new ArgumentNullException("address");
-            var base58 = dest as Base58Data;
-            var network = base58 == null ? Network : base58.Network;
-            var address = dest.ScriptPubKey.GetDestinationAddress(network);
-            if(address == null)
-                throw new ArgumentException("address does not represent a valid bitcoin address", "address");
-            if(dest is BitcoinColoredAddress)
-                return (BitcoinColoredAddress)dest;
-            return address;
-        }
+		private Base58Data AssertAddress(IDestination dest)
+		{
+			if(dest == null)
+				throw new ArgumentNullException("address");
+			var base58 = dest as Base58Data;
+			var network = base58 == null ? Network : base58.Network;
+			var address = dest.ScriptPubKey.GetDestinationAddress(network);
+			if(address == null)
+				throw new ArgumentException("address does not represent a valid bitcoin address", "address");
+			if(dest is BitcoinColoredAddress)
+				return (BitcoinColoredAddress)dest;
+			return address;
+		}
 
-        public Task<GetBlockResponse> GetBlock(BlockFeature blockFeature, bool headerOnly = false)
+		public Task<GetBlockResponse> GetBlock(BlockFeature blockFeature, bool headerOnly = false, bool extended = false)
         {
-            return Get<GetBlockResponse>("blocks/" + EscapeUrlPart(blockFeature.ToString()) + "?headerOnly=" + headerOnly);
+            return Get<GetBlockResponse>("blocks/" + EscapeUrlPart(blockFeature.ToString()) + "?headerOnly=" + headerOnly + "&extended=" + extended);
         }
 
         private string GetFullUri(string relativePath, params object[] parameters)
@@ -323,46 +375,63 @@ namespace QBitNinja.Client
             return Send<T>(HttpMethod.Get, null, relativePath, parameters);
         }
 
-        public async Task<T> Send<T>(HttpMethod method, object body, string relativePath, params object[] parameters)
+        static HttpClient DefaultClient;
+		HttpClient Client = DefaultClient;
+		static QBitNinjaClient()
+		{
+			HttpClient client = CreateHttpClient(new HttpClientHandler());
+			DefaultClient = client;
+		}
+
+		public void SetHttpMessageHandler(HttpMessageHandler innerHandler)
+		{
+			Client = CreateHttpClient(innerHandler);
+		}
+
+		private static HttpClient CreateHttpClient(HttpMessageHandler innerHandler)
+		{
+			var client = new HttpClient(new DecompressionHandler(innerHandler));
+			client.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
+			return client;
+		}
+
+		public async Task<T> Send<T>(HttpMethod method, object body, string relativePath, params object[] parameters)
         {
-            var uri = GetFullUri(relativePath, parameters);
-            using(var client = new HttpClient())
+            var uri = GetFullUri(relativePath, parameters);            
+            var message = new HttpRequestMessage(method, uri);
+            if(body != null)
             {
-                var message = new HttpRequestMessage(method, uri);
-                if(body != null)
+                message.Content = new StringContent(Serializer.ToString(body, Network), Encoding.UTF8, "application/json");
+            }
+            var result = await Client.SendAsync(message).ConfigureAwait(false);
+            if(result.StatusCode == HttpStatusCode.NotFound)
+                return default(T);
+            if(!result.IsSuccessStatusCode)
+            {
+                string error = await result.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if(!string.IsNullOrEmpty(error))
                 {
-                    message.Content = new StringContent(Serializer.ToString(body, Network), Encoding.UTF8, "application/json");
-                }
-                var result = await client.SendAsync(message).ConfigureAwait(false);
-                if(result.StatusCode == HttpStatusCode.NotFound)
-                    return default(T);
-                if(!result.IsSuccessStatusCode)
-                {
-                    string error = await result.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    if(!string.IsNullOrEmpty(error))
+                    try
                     {
-                        try
-                        {
-                            var errorObject = Serializer.ToObject<QBitNinjaError>(error, Network);
-                            if(errorObject.StatusCode != 0)
-                                throw new QBitNinjaException(errorObject);
-                        }
-                        catch(JsonSerializationException)
-                        {
-                        }
-                        catch(JsonReaderException)
-                        {
-                        }
+                        var errorObject = Serializer.ToObject<QBitNinjaError>(error, Network);
+                        if(errorObject.StatusCode != 0)
+                            throw new QBitNinjaException(errorObject);
+                    }
+                    catch(JsonSerializationException)
+                    {
+                    }
+                    catch(JsonReaderException)
+                    {
                     }
                 }
-                result.EnsureSuccessStatusCode();
-                if(typeof(T) == typeof(byte[]))
-                    return (T)(object)await result.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-                var str = await result.Content.ReadAsStringAsync().ConfigureAwait(false);
-                if(typeof(T) == typeof(string))
-                    return (T)(object)str;
-                return Serializer.ToObject<T>(str, Network);
             }
+            result.EnsureSuccessStatusCode();
+            if(typeof(T) == typeof(byte[]))
+                return (T)(object)await result.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var str = await result.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if(typeof(T) == typeof(string))
+                return (T)(object)str;
+            return Serializer.ToObject<T>(str, Network);
         }
 
         public Task<T> Post<T>(string relativePath, object content)

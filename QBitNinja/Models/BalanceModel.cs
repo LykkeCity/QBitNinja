@@ -23,9 +23,15 @@ namespace QBitNinja.Client.Models
 #if !CLIENT
         public BalanceModel(IEnumerable<OrderedBalanceChange> balance, ConcurrentChain chain)
         {
-            Operations = balance
+            Operations = GetBalanceOperations(balance, chain);
+        }
+
+        internal List<BalanceOperation> GetBalanceOperations(IEnumerable<OrderedBalanceChange> balance, ConcurrentChain chain)
+        {
+            return balance
                 .Where(b => b.SpentCoins.Count > 0 || b.ReceivedCoins.Count > 0)
                 .Select(c => new BalanceOperation(c, chain))
+                .OrderByDescending(c => c.FirstSeen)
                 .ToList();
         }
 
@@ -42,6 +48,11 @@ namespace QBitNinja.Client.Models
         }
 #endif
         public List<BalanceOperation> Operations
+        {
+            get;
+            set;
+        }
+        public List<BalanceOperation> ConflictedOperations
         {
             get;
             set;
@@ -99,9 +110,9 @@ namespace QBitNinja.Client.Models
 
         public static BalanceSummaryDetails operator +(BalanceSummaryDetails c1, BalanceSummaryDetails c2)
         {
-            if (c1 == null)
+            if(c1 == null)
                 return c2;
-            if (c2 == null)
+            if(c2 == null)
                 return c1;
             return new BalanceSummaryDetails
             {
@@ -114,14 +125,14 @@ namespace QBitNinja.Client.Models
 
         private static AssetBalanceSummaryDetails[] Add(AssetBalanceSummaryDetails[] a, AssetBalanceSummaryDetails[] b)
         {
-            if (a == null && b == null)
+            if(a == null && b == null)
                 return null;
-            if (a != null && b == null)
+            if(a != null && b == null)
                 return a;
-            if (a == null && b != null)
+            if(a == null && b != null)
                 return b;
             List<AssetBalanceSummaryDetails> result = new List<AssetBalanceSummaryDetails>();
-            foreach (var group in a.Concat(b).GroupBy(_ => _.Asset))
+            foreach(var group in a.Concat(b).GroupBy(_ => _.Asset))
             {
                 AssetBalanceSummaryDetails details = new AssetBalanceSummaryDetails();
                 details.Quantity = group.Sum(o => o.Quantity);
@@ -138,7 +149,7 @@ namespace QBitNinja.Client.Models
 
         public static BalanceSummaryDetails operator -(BalanceSummaryDetails c1)
         {
-            if (c1 == null)
+            if(c1 == null)
                 return null;
             BalanceSummaryDetails result = new BalanceSummaryDetails
             {
@@ -152,10 +163,10 @@ namespace QBitNinja.Client.Models
 
         private static AssetBalanceSummaryDetails[] Minus(AssetBalanceSummaryDetails[] a)
         {
-            if (a == null)
+            if(a == null)
                 return null;
             List<AssetBalanceSummaryDetails> result = new List<AssetBalanceSummaryDetails>();
-            foreach (var detail in a)
+            foreach(var detail in a)
             {
                 var balance = new AssetBalanceSummaryDetails();
                 balance.Quantity = -detail.Quantity;
@@ -174,15 +185,15 @@ namespace QBitNinja.Client.Models
                 Received = changes.Select(_ => _.Amount < Money.Zero ? Money.Zero : _.Amount).Sum(),
             };
 
-            if (colored)
+            if(colored)
             {
                 Dictionary<AssetId, AssetBalanceSummaryDetails> coloredDetails = new Dictionary<AssetId, AssetBalanceSummaryDetails>();
-                foreach (var change in changes)
+                foreach(var change in changes)
                 {
-                    foreach (var coin in change.ReceivedCoins.OfType<ColoredCoin>())
+                    foreach(var coin in change.ReceivedCoins.OfType<ColoredCoin>())
                     {
                         AssetBalanceSummaryDetails coloredDetail = null;
-                        if (!coloredDetails.TryGetValue(coin.AssetId, out coloredDetail))
+                        if(!coloredDetails.TryGetValue(coin.AssetId, out coloredDetail))
                         {
                             coloredDetail = new AssetBalanceSummaryDetails();
                             coloredDetail.Asset = coin.AssetId.GetWif(network);
@@ -191,10 +202,10 @@ namespace QBitNinja.Client.Models
                         coloredDetail.Quantity += (long)coin.Asset.Quantity;
                         coloredDetail.Received += (long)coin.Asset.Quantity;
                     }
-                    foreach (var coin in change.SpentCoins.OfType<ColoredCoin>())
+                    foreach(var coin in change.SpentCoins.OfType<ColoredCoin>())
                     {
                         AssetBalanceSummaryDetails coloredDetail = null;
-                        if (!coloredDetails.TryGetValue(coin.AssetId, out coloredDetail))
+                        if(!coloredDetails.TryGetValue(coin.AssetId, out coloredDetail))
                         {
                             coloredDetail = new AssetBalanceSummaryDetails();
                             coloredDetail.Asset = coin.AssetId.GetWif(network);
@@ -268,7 +279,7 @@ namespace QBitNinja.Client.Models
 
         internal void PrepareForSend(BlockFeature at, bool debug)
         {
-            if (at != null)
+            if(at != null)
             {
                 UnConfirmed = null;
             }
@@ -276,7 +287,7 @@ namespace QBitNinja.Client.Models
 #if !CLIENT
             Locator = null;
 #endif
-            if (!debug)
+            if(!debug)
             {
                 CacheHit = null;
             }
@@ -372,6 +383,6 @@ namespace QBitNinja.Client.Models
         public override string ToString()
         {
             return Amount.ToString();
-        }        
+        }
     }
 }

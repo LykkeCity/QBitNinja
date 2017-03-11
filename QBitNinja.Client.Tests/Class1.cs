@@ -40,7 +40,16 @@ namespace QBitNinja.Client.Tests
 
             var balanceSummary = client.GetBalanceSummary(new BitcoinPubKeyAddress("15sYbVpRh6dyWycZMwPdxJWD4xbfxReeHe")).Result;
             Assert.True(balanceSummary.Confirmed.TransactionCount > 60);
-        }
+
+
+			//http://api.qbit.ninja/balances/1dice8EMZmqKvrGE4Qc9bUFf9PX3xaYDp?from=336410&until=336409
+			var ops = client.GetBalanceBetween(new BalanceSelector(BitcoinAddress.Create("1dice8EMZmqKvrGE4Qc9bUFf9PX3xaYDp")), new BlockFeature(336410), new BlockFeature(336409)).Result;
+			Assert.Equal(3, ops.Operations.Count);
+
+			//http://api.qbit.ninja/balances/1dice8EMZmqKvrGE4Qc9bUFf9PX3xaYDp?from=177000
+			ops = client.GetBalanceBetween(new BalanceSelector(BitcoinAddress.Create("1dice8EMZmqKvrGE4Qc9bUFf9PX3xaYDp")), new BlockFeature(177000), null).Result;
+			Assert.Equal(4, ops.Operations.Count);
+		}
 
 
         [Fact] //Will detect when I forget to change namespace for one type in the client package
@@ -52,15 +61,6 @@ namespace QBitNinja.Client.Tests
         [Fact]
         public void temp()
         {
-            var client = new QBitNinjaClient(Network.TestNet);
-            var result = client.GetBalance(BitcoinAddress.Create("mnDQg9yvKQv3u88favjCfGtDhfD5tpq9wa")).Result;
-            var operation = result.Operations.FirstOrDefault(o => o.TransactionId == uint256.Parse("ed7bc6de74ce3c8d2e2f6d9b2ac487eacc39a03ea11f9431c4865c7ce27244e7"));
-
-            var includedCoins = operation.SpentCoins.ToDictionary(o => o.Outpoint);
-            var tx = client.GetTransaction(uint256.Parse("ed7bc6de74ce3c8d2e2f6d9b2ac487eacc39a03ea11f9431c4865c7ce27244e7")).Result;
-
-            var rogue = tx.SpentCoins.OfType<Coin>().Single(o => !includedCoins.ContainsKey(o.Outpoint));
-            var dest = rogue.ScriptPubKey.GetDestination().GetAddress(Network.TestNet); //mx97heA9c7o54YgZR7hVaYnpKkWFbmL6nr
         }
 
 

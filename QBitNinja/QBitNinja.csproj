@@ -81,12 +81,12 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\packages\WindowsAzure.Storage.4.3.0\lib\net40\Microsoft.WindowsAzure.Storage.dll</HintPath>
     </Reference>
-    <Reference Include="NBitcoin, Version=3.0.0.41, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\NBitcoin.3.0.0.41\lib\net45\NBitcoin.dll</HintPath>
+    <Reference Include="NBitcoin, Version=3.0.1.7, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\NBitcoin.3.0.1.7\lib\net45\NBitcoin.dll</HintPath>
       <Private>True</Private>
     </Reference>
-    <Reference Include="NBitcoin.Indexer, Version=2.0.7.13, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\NBitcoin.Indexer.2.0.7.13\lib\net45\NBitcoin.Indexer.dll</HintPath>
+    <Reference Include="NBitcoin.Indexer, Version=2.0.7.20, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\NBitcoin.Indexer.2.0.7.20\lib\net45\NBitcoin.Indexer.dll</HintPath>
       <Private>True</Private>
     </Reference>
     <Reference Include="Newtonsoft.Json, Version=9.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
@@ -172,11 +172,17 @@
     <Compile Include="App_Start\RouteConfig.cs" />
     <Compile Include="App_Start\WebApiConfig.cs" />
     <Compile Include="CacheBlocksRepository.cs" />
+    <Compile Include="CompressionHandler.cs" />
+    <Compile Include="Compressors.cs" />
     <Compile Include="InitialIndexer.cs" />
     <Compile Include="JsonConverters\EnumAliasJsonConverter.cs" />
     <Compile Include="JsonConverters\EnumTypeJsonConverter.cs" />
     <Compile Include="JsonConverters\UIntJsonConverter.cs" />
+    <Compile Include="ModelBinders\BalanceIdModelBinder.cs" />
     <Compile Include="ModelBinders\UIntModelBinding.cs" />
+    <Compile Include="Models\BalanceSelector.cs" />
+    <Compile Include="Models\ChainStatus.cs" />
+    <Compile Include="Models\ExtendedBlockInformation.cs" />
     <Compile Include="Models\NewBlockSubscription.cs" />
     <Compile Include="Models\VersionStatsResponse.cs" />
     <Compile Include="Notifications\BroadcastedTransaction.cs" />
@@ -268,7 +274,7 @@
     <Folder Include="App_Data\" />
   </ItemGroup>
   <PropertyGroup>
-    <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>
+    <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">14.0</VisualStudioVersion>
     <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'QA|AnyCPU'">
