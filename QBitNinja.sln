@@ -22,16 +22,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Build", "Build\Build.csproj
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QBitNinja.Listener.Console", "QBitNinja.Listener.Console\QBitNinja.Listener.Console.csproj", "{9A05CF5C-3BF7-4898-8268-53089008B64C}"
 EndProject
-<<<<<<< HEAD
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".nuget", ".nuget", "{9FC402ED-963F-4EC0-A5C0-38139473804E}"
-	ProjectSection(SolutionItems) = preProject
-		.nuget\NuGet.Config = .nuget\NuGet.Config
-		.nuget\NuGet.exe = .nuget\NuGet.exe
-		.nuget\NuGet.targets = .nuget\NuGet.targets
-	EndProjectSection
-=======
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "QBitNinja.Client.NETCore", "QBitNinja.Client.NETCore\QBitNinja.Client.NETCore.csproj", "{30AEC09B-8D39-417F-85C3-A33F8AFB2193}"
->>>>>>> 29d78227298a3febeff236c0330bcc5cc3455cc8
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
