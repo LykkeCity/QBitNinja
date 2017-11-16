@@ -182,7 +182,7 @@ Components/
 /.vs/config/applicationhost.config
 /QBitNinja.Hosting.Azure.sln
 Build/*.nupkg
-/.vs/restore.dg
 /QBitNinja.Client.NETCore/project.lock.json
-/QBitNinja/Properties/PublishProfiles/bc2api - Web Deploy.pubxml
-/QBitNinja/Properties/PublishProfiles/bc2api - FTP.pubxml
+/QBitNinja/Properties/PublishProfiles/*.pubxml
+.vs/
+/Build/nuget.exe
