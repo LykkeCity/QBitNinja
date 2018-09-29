@@ -109,6 +109,15 @@ namespace QBitNinja.Notifications
         List<IDisposable> _Disposables = new List<IDisposable>();
         public void Listen(ConcurrentChain chain = null)
         {
+            ListenerTrace.Info($"Connecting to node {_Configuration.Indexer.Node}");
+            var ip = Utils.ParseIpEndpoint(string.IsNullOrWhiteSpace(_Configuration.Indexer.Node) ? "127.0.0.1" : _Configuration.Indexer.Node, Configuration.Indexer.Network.DefaultPort);
+            ListenerTrace.Info($"Connecting to node ip {ip.ToString()}");
+            var node = Node.Connect(Configuration.Indexer.Network, ip);
+            ListenerTrace.Info($"Connected, trying handshake...");
+            node.VersionHandshake();
+            ListenerTrace.Info($"Hanshaked");
+            node.Disconnect();
+
             _Chain = new ConcurrentChain(_Configuration.Indexer.Network);
             _Indexer = Configuration.Indexer.CreateIndexer();
             if(chain == null)
@@ -129,10 +138,11 @@ namespace QBitNinja.Notifications
             _Group.AllowSameGroup = true;
             _Group.MaximumNodeConnection = 2;
             AddressManager addrman = new AddressManager();
-            addrman.Add(new NetworkAddress(Utils.ParseIpEndpoint(_Configuration.Indexer.Node, Configuration.Indexer.Network.DefaultPort)),
-                        IPAddress.Parse("127.0.0.1"));
-            _Group.NodeConnectionParameters.TemplateBehaviors.Add(new AddressManagerBehavior(addrman));
-            _Group.NodeConnectionParameters.TemplateBehaviors.Add(new ChainBehavior(_Chain));
+
+            addrman.Add(new NetworkAddress(ip), IPAddress.Parse("127.0.0.1"));
+
+            _Group.NodeConnectionParameters.TemplateBehaviors.Add(new AddressManagerBehavior(addrman) { Mode = AddressManagerBehaviorMode.None });
+            _Group.NodeConnectionParameters.TemplateBehaviors.Add(new ChainBehavior(_Chain) { SkipPoWCheck = true });
             _Group.NodeConnectionParameters.TemplateBehaviors.Add(new Behavior(this));
 
 
@@ -177,9 +187,8 @@ namespace QBitNinja.Notifications
                         _Broadcasting.TryAdd(hash, tx.Transaction);
                         if(indexedTx == null || !indexedTx.BlockIds.Any(id => Chain.Contains(id)))
                         {
-                            var unused = SendMessageAsync(new InvPayload(tx.Transaction));
+                            var unused = SendMessageAsync(tx.Transaction);
                         }
-
                         var reschedule = new[]
                         {
                             TimeSpan.FromMinutes(5),
@@ -277,10 +286,38 @@ namespace QBitNinja.Notifications
         }
 
         NodesGroup _Group;
-        private async Task SendMessageAsync(Payload payload)
+        private async Task SendMessageAsync(Transaction tx)
         {
+            var payload = new InvPayload(tx);
             int[] delays = new int[] { 50, 100, 200, 300, 1000, 2000, 3000, 6000, 12000 };
             int i = 0;
+            var rpc = Configuration.TryCreateRPCClient();
+            var txId = tx.GetHash();
+            if(rpc != null)
+            {
+                try
+                {
+                    ListenerTrace.Info("Sending " + txId + " via RPC");
+                    await rpc.SendRawTransactionAsync(tx);
+                    ListenerTrace.Info("Successfully broadcasted");
+                    Transaction unused;
+                    _Broadcasting.TryRemove(txId, out unused);
+                }
+                catch(NBitcoin.RPC.RPCException ex)
+                {
+                    ListenerTrace.Info("Broadcasted transaction rejected (" + ex.Message + ") " + txId);
+                    var reject = new RejectPayload()
+                    {
+                        Message = "tx",
+                        Reason = ex.Message,
+                        Code = RejectCode.INVALID,
+                        Hash = txId
+                    };
+                    Transaction unused;
+                    _Broadcasting.TryRemove(txId, out unused);
+                }
+                return;
+            }
             while(_Group.ConnectedNodes.Count != 2)
             {
                 i++;
@@ -314,8 +351,8 @@ namespace QBitNinja.Notifications
             {
                 failed = true;
             }
-            var tries = new[] 
-            { 
+            var tries = new[]
+            {
                 TimeSpan.FromSeconds(0.0),
                 TimeSpan.FromMinutes(1.0),
                 TimeSpan.FromMinutes(5.0),

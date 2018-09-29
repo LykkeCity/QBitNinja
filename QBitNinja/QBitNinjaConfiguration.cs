@@ -13,6 +13,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Primitives;
+using System.IO;
+using NBitcoin.RPC;
 
 namespace QBitNinja
 {
@@ -162,47 +164,27 @@ namespace QBitNinja
 	}
 	public class QBitNinjaConfiguration
 	{
-		class ConfigurationManagerConfiguration : IConfiguration
-		{
-			public string this[string key]
-			{
-				get
-				{
-					return ConfigurationManager.AppSettings[key];
-				}
-				set
-				{
-					ConfigurationManager.AppSettings[key] = value;
-				}
-			}
-
-			public IEnumerable<IConfigurationSection> GetChildren()
-			{
-				return new IConfigurationSection[0];
-			}
-
-			public IChangeToken GetReloadToken()
-			{
-				return null;
-			}
-
-			public IConfigurationSection GetSection(string key)
-			{
-				return null;
-			}
-		}
 		public QBitNinjaConfiguration()
 		{
 			CoinbaseMaturity = 100;
 		}
-		public static QBitNinjaConfiguration FromConfiguration()
+		public static QBitNinjaConfiguration FromConfiguration(IConfiguration configuration)
 		{
 			var conf = new QBitNinjaConfiguration
 			{
-				Indexer = IndexerConfiguration.FromConfiguration(new ConfigurationManagerConfiguration()),
-				LocalChain = ConfigurationManager.AppSettings["LocalChain"],
-				ServiceBus = ConfigurationManager.AppSettings["ServiceBus"]
+				Indexer = IndexerConfiguration.FromConfiguration(configuration),
+				LocalChain = configuration["LocalChain"],
+				ServiceBus = configuration["ServiceBus"],
+				RPCConnectionString = configuration["RPCConnectionString"],
 			};
+			var nocache = configuration["NoLocalChain"] == "true";
+			var qbitDirectory = QBitNinja.DefaultDataDirectory.GetDirectory("qbitninja", conf.Indexer.Network.ToString());
+			if(string.IsNullOrEmpty(conf.LocalChain))
+			{
+				conf.LocalChain = Path.Combine(qbitDirectory, "LocalChain.dat");
+			}
+			if(nocache)
+				conf.LocalChain = null;
 			conf.CoinbaseMaturity = conf.Indexer.Network.Consensus.CoinbaseMaturity;
 			return conf;
 		}
@@ -319,6 +301,21 @@ namespace QBitNinja
 		{
 			get;
 			set;
+		}
+		public string RPCConnectionString
+		{
+			get;
+			set;
+		}
+
+		public RPCClient TryCreateRPCClient()
+		{
+			if(string.IsNullOrEmpty(RPCConnectionString))
+				return null;
+			RPCCredentialString result;
+			if(!NBitcoin.RPC.RPCCredentialString.TryParse(RPCConnectionString, out result))
+				return null;
+			return new RPCClient(result, Indexer.Network);
 		}
 	}
 }

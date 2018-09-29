@@ -50,11 +50,14 @@ namespace QBitNinja.Controllers
 			switch(this.Request.Content.Headers.ContentType.MediaType)
 			{
 				case "application/json":
-					tx = NBitcoin.Transaction.Parse(JsonConvert.DeserializeObject<string>(await Request.Content.ReadAsStringAsync()));
+					tx = NBitcoin.Transaction.Parse(JsonConvert.DeserializeObject<string>(await Request.Content.ReadAsStringAsync()), Network);
 					break;
 				case "application/octet-stream":
 					{
-						tx = new Transaction(await Request.Content.ReadAsByteArrayAsync());
+                        tx = this.ConsensusFactory.CreateTransaction();
+                        BitcoinStream bitcoinStream = new BitcoinStream(await Request.Content.ReadAsByteArrayAsync());
+                        bitcoinStream.ConsensusFactory = ConsensusFactory;
+                        tx.ReadWrite(bitcoinStream);
 						break;
 					}
 				default:
@@ -171,10 +174,11 @@ namespace QBitNinja.Controllers
 			BlockFeature from = null,
 			bool includeImmature = false,
 			bool unspentOnly = false,
-			bool colored = false)
+			bool colored = false,
+			int? unconfExpiration = null)
 		{
 			var balanceId = new BalanceId(walletName);
-			return Balance(balanceId, continuation, until, from, includeImmature, unspentOnly, colored);
+			return Balance(balanceId, continuation, until, from, includeImmature, unspentOnly, colored, unconfExpiration);
 		}
 
 		[HttpPost]
@@ -324,10 +328,12 @@ namespace QBitNinja.Controllers
 			[ModelBinder(typeof(BlockFeatureModelBinder))]
 			BlockFeature at = null,
 			bool debug = false,
-			bool colored = false)
+			bool colored = false,
+			int? unconfExpiration = null
+			)
 		{
 			BalanceId id = new BalanceId(walletName);
-			return BalanceSummary(id, at, debug, colored);
+			return BalanceSummary(id, at, debug, colored, unconfExpiration);
 		}
 
 		[HttpGet]
@@ -491,19 +497,21 @@ namespace QBitNinja.Controllers
 			[ModelBinder(typeof(BlockFeatureModelBinder))]
 			BlockFeature at = null,
 			bool debug = false,
-			bool colored = false)
+			bool colored = false,
+			int? unconfExpiration = null)
 		{
 			colored = colored || IsColoredAddress();
-			return BalanceSummary(balanceId, at, debug, colored);
+			return BalanceSummary(balanceId, at, debug, colored, unconfExpiration);
 		}
 
 		public BalanceSummary BalanceSummary(
 			BalanceId balanceId,
 			BlockFeature at,
 			bool debug,
-			bool colored
-			)
+			bool colored,
+			int? unconfExpiration)
 		{
+			var expiration = GetExpiration(unconfExpiration);
 			var repo = Configuration.CreateWalletRepository();
 			CancellationTokenSource cancel = new CancellationTokenSource();
 			cancel.CancelAfter(30000);
@@ -519,7 +527,7 @@ namespace QBitNinja.Controllers
 			if(at != null)
 				query.From = ToBalanceLocator(atBlock);
 			if(query.From == null)
-				query.From = new UnconfirmedBalanceLocator(DateTimeOffset.UtcNow - Expiration);
+				query.From = new UnconfirmedBalanceLocator(DateTimeOffset.UtcNow - expiration);
 
 			query.PageSizes = new[] { 1, 10, 100 };
 
@@ -544,7 +552,7 @@ namespace QBitNinja.Controllers
 			};
 
 			int stopAtHeight = cachedSummary.Locator == null ? -1 : cachedLocator.Height;
-			int lookback = (int)(Expiration.Ticks / this.Network.Consensus.PowTargetSpacing.Ticks);
+			int lookback = (int)(expiration.Ticks / this.Network.Consensus.PowTargetSpacing.Ticks);
 			if(at == null)
 				stopAtHeight = stopAtHeight - lookback;
 
@@ -554,7 +562,7 @@ namespace QBitNinja.Controllers
 			var diff =
 				client
 				.GetOrderedBalance(balanceId, query)
-				.WhereNotExpired(Expiration)
+				.WhereNotExpired(expiration)
 				.TakeWhile(_ => !cancel.IsCancellationRequested)
 				//Some confirmation of the fetched unconfirmed may hide behind stopAtHeigh
 				.TakeWhile(_ => _.BlockId == null || _.Height > stopAtHeight - lookback)
@@ -679,10 +687,11 @@ namespace QBitNinja.Controllers
 			BlockFeature from = null,
 			bool includeImmature = false,
 			bool unspentOnly = false,
-			bool colored = false)
+			bool colored = false,
+			int? unconfExpiration = null)
 		{
 			colored = colored || IsColoredAddress();
-			return Balance(balanceId, continuation, until, from, includeImmature, unspentOnly, colored);
+			return Balance(balanceId, continuation, until, from, includeImmature, unspentOnly, colored, unconfExpiration);
 		}
 
 		//Property passed by BalanceIdModelBinder
@@ -698,8 +707,10 @@ namespace QBitNinja.Controllers
 			BlockFeature from,
 			bool includeImmature,
 			bool unspentOnly,
-			bool colored)
+			bool colored,
+			int? unconfExpiration)
 		{
+			var expiration = GetExpiration(unconfExpiration);
 			CancellationTokenSource cancel = new CancellationTokenSource();
 			cancel.CancelAfter(30000);
 
@@ -725,7 +736,7 @@ namespace QBitNinja.Controllers
 
 			if(query.From == null)
 			{
-				query.From = new UnconfirmedBalanceLocator(DateTimeOffset.UtcNow - Expiration);
+				query.From = new UnconfirmedBalanceLocator(DateTimeOffset.UtcNow - expiration);
 			}
 
 			if(until != null)
@@ -743,7 +754,7 @@ namespace QBitNinja.Controllers
 				client
 				.GetOrderedBalance(balanceId, query)
 				.TakeWhile(_ => !cancel.IsCancellationRequested)
-				.WhereNotExpired(Expiration)
+				.WhereNotExpired(expiration)
 				.Where(o => includeImmature || IsMature(o, Chain.Tip))
 				.AsBalanceSheet(Chain);
 
@@ -797,6 +808,11 @@ namespace QBitNinja.Controllers
 				}
 			}
 			return result;
+		}
+
+		private TimeSpan GetExpiration(int? unconfExpiration)
+		{
+			return unconfExpiration == null ? Expiration : TimeSpan.FromHours(unconfExpiration.Value);
 		}
 
 		private List<OrderedBalanceChange> RemoveConflicts(BalanceSheet balance)
@@ -953,6 +969,8 @@ namespace QBitNinja.Controllers
 			}
 		}
 
+        public ConsensusFactory ConsensusFactory => Network.Consensus.ConsensusFactory;
+
 		internal GetBlockResponse JsonBlock(BlockFeature blockFeature, bool headerOnly, bool extended)
 		{
 			var block = GetBlock(blockFeature, headerOnly);
@@ -1026,7 +1044,7 @@ namespace QBitNinja.Controllers
 			if(hash == null)
 				return null;
 			if(chainedBlock != null && chainedBlock.Height == 0)
-				return headerOnly ? new NBitcoin.Block(Network.GetGenesis().Header) : Network.GetGenesis();
+				return headerOnly ? CreateBlock(Network.GetGenesis().Header) : Network.GetGenesis();
 			var client = Configuration.Indexer.CreateIndexerClient();
 			return headerOnly ? GetHeader(hash, client) : client.GetBlock(hash);
 		}
@@ -1039,12 +1057,26 @@ namespace QBitNinja.Controllers
 				var b = client.GetBlock(hash);
 				if(b == null)
 					return null;
-				return new Block(b.Header);
+				return CreateBlock(b.Header);
 			}
-			return new Block(header.Header);
+			return CreateBlock(header.Header);
 		}
 
-		private static HttpResponseMessage Response(IBitcoinSerializable obj)
+        private Block CreateBlock(BlockHeader header)
+        {
+            var ms = new MemoryStream(100);
+            BitcoinStream bs = new BitcoinStream(ms, true);
+            bs.ConsensusFactory = ConsensusFactory;
+            bs.ReadWrite(header);
+
+            var block = ConsensusFactory.CreateBlock();
+            ms.Position = 0;
+            bs = new BitcoinStream(ms, false);
+            block.Header.ReadWrite(bs);
+            return block;
+        }
+
+        private static HttpResponseMessage Response(IBitcoinSerializable obj)
 		{
 			HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK)
 			{
